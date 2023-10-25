@@ -8,7 +8,7 @@ Copyright (C) 2021 Sovrasov V. - All Rights Reserved
 
 import numpy as np
 import torch.nn as nn
-
+import segment_anything
 
 def empty_flops_counter_hook(module, input, output):
     module.__flops__ += 0
@@ -157,6 +157,65 @@ def rnn_cell_flops_counter_hook(rnn_cell_module, input, output):
     rnn_cell_module.__flops__ += int(flops)
 
 
+
+
+
+
+def sam_multihead_attention_counter_hook(multihead_attention_module, input, output):
+    flops = 0
+
+    q, k, v = input[0], input[0], input[0]
+
+    batch_size = q.shape[0]
+    len_idx = 1
+    dim_idx = 3
+
+    qdim = q.shape[dim_idx]
+    kdim = k.shape[dim_idx]
+    vdim = v.shape[dim_idx]
+
+    qlen = q.shape[len_idx] * q.shape[len_idx+1]
+    klen = k.shape[len_idx] * k.shape[len_idx+1]
+    vlen = v.shape[len_idx] * v.shape[len_idx+1]
+
+    num_heads = multihead_attention_module.num_heads
+
+    flops = 0
+
+    # Q scaling
+    flops += qlen * qdim
+
+    # Initial projections
+    flops += (
+        (qlen * qdim * qdim)  # QW
+        + (klen * kdim * kdim)  # KW
+        + (vlen * vdim * vdim)  # VW
+    )
+
+
+    # attention heads: scale, matmul, softmax, matmul
+    qk_head_dim = qdim // num_heads
+    v_head_dim = vdim // num_heads
+
+    head_flops = (
+        (qlen * klen * qk_head_dim)  # QK^T
+        + (qlen * klen)  # softmax
+        + (qlen * klen * v_head_dim)  # AV
+    )
+
+    flops += num_heads * head_flops
+
+    # final projection, bias is always enabled
+    flops += qlen * vdim * (vdim + 1)
+
+    flops *= batch_size
+    multihead_attention_module.__flops__ += int(flops)
+
+
+
+
+
+
 def multihead_attention_counter_hook(multihead_attention_module, input, output):
     flops = 0
 
@@ -274,7 +333,8 @@ MODULES_MAPPING = {
     nn.RNNCell: rnn_cell_flops_counter_hook,
     nn.LSTMCell: rnn_cell_flops_counter_hook,
     nn.GRUCell: rnn_cell_flops_counter_hook,
-    nn.MultiheadAttention: multihead_attention_counter_hook
+    nn.MultiheadAttention: multihead_attention_counter_hook,
+    segment_anything.modeling.image_encoder.Attention: sam_multihead_attention_counter_hook
 }
 
 if hasattr(nn, 'GELU'):
